@@ -1,0 +1,339 @@
+---
+title: NFL EPA Project
+author: R package build
+date: '2021-06-29'
+slug: nfl-ep-a-project
+categories:
+  - nfl
+  - R
+tags:
+  - NFL
+  - NCAA
+
+---  
+
+Drew Weber
+Results
+Econ 6731
+
+```{css, echo = FALSE}
+
+table, td, th {
+  border: none;
+  padding-left: 1em;
+  padding-right: 1em;
+  margin-left: auto;
+  margin-right: auto;
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(tidyverse)
+library(nflscrapR)
+library(devtools)
+library(dplyr)
+library(nflfastR)
+library(stargazer)
+library(ggplot2)
+library(shiny)
+library(na.tools)
+library(ggimage)
+```
+
+
+## 1.	Introduction
+
+Two metrics analysts look to in order to gauge a teams performance is Expected Points (EP) and Expected Points Added (EPA).  EP is a summation of an offense's potential points based on plays and field positioning.  Brian Burke, from the Advanced Football Analytics, explains this well, "For example, if we look at all 1st and 10s from an offense’ own 20-yard line, the team on offense will score next slightly more often than its opponent. If we add up all the ‘next points’ scored for and against the offense’s team, whether on the current drive or subsequent drives, we can estimate the net point advantage an offense can expect for any football situation. For a 1st and 10 at an offense’s own 20, it’s +0.4 net points, and at the opponent’s 20, it’s +4.0 net points. These net point values are called Expected Points (EP), and every down-distance-field position situation has a corresponding EP value," (Burke, Advanced Football Analytics).    
+
+EPA is simply the expected points added per play in football.  For example, suppose the offensive team has a 1st down and 10 at midfield. This would be worth approximately +2.0 Expected Points (EP), a 5-yard gain would set the offensive team up for a 2nd and 5 from the 45. This would then make the situation worth +2.1 EP.  The 5-yard gain from the play netted the offensive team with a +0.1 gain in EP, or rather a +0.1 EPA (Burke, Advanced Football Analytics).
+
+In this paper, we look to analyze how we can derive success in the NFL by using EPA.
+
+
+## 2. Dataset
+
+Our data set is a compilation of Play-by-Play data from the 2020 NFL season.  It includes 313 columns of information for each play of the 2020 NFL season.  Needless to say, this data set needed to be compressed.  We have compressed it down to 17 of the categories, which is very subject to change as we go along and discover serial correlation and other columns, we will need to conduct regressions.  Our data is from Github and I was actually directed to it by Ben Baldwin via email, who is an author/statistician for The Athletic.  
+
+```{r, message=FALSE}
+pbp1<-read_rds("/Users/drew/Downloads/play_by_play_2020.rds")
+
+pbp2020 <- pbp1 %>% 
+	filter(!is_na(epa), play_type=="no_play" | play_type=="pass" | play_type=="run")
+
+pbp2020 <- pbp2020 %>%
+	mutate(
+	pass = if_else(str_detect(desc, "( pass)|(sacked)|(scramble)"), 1, 0),
+	rush = if_else(str_detect(desc, "(left end)|(left tackle)|(left guard)|(up the middle)|(right guard)|(right tackle)|(right end)") & pass == 0, 1, 0),
+	success = ifelse(epa>0, 1 , 0)
+	) 
+
+firstdown <- pbp2020[ which(pbp2020$down==1), na.rm = TRUE]
+
+seconddown <- pbp2020[ which(pbp2020$down==2), na.rm = TRUE]
+
+thirddown <- pbp1[ which(pbp1$down==3), na.rm = TRUE]
+
+fourthdown <- pbp1[ which(pbp1$down==4), na.rm = TRUE]
+```
+
+ 
+## 3. Summary Statistics 
+
+From Table 1, we can see various useful statistics for visualizing our data.  For instance, EP has a mean of 2.232, which makes sense as that is most likely the average points per drive scored in the NFL.  We also see the mean EPA is 0.035, which may seem low, but averaged over an entire NFL season on a play by play basis, would make sense.  Win Probability is at mean 0.498 due to ties being in the NFL.  Some of these rows may not make much sense as NA are used in the data set; such as for QB Scramble.  We will use Win Probability Added as a way to derive team success; the more likely a team makes themselves to win, the more they are winning!
+
+```{r, message=FALSE, results = 'asis'}
+sumstats<-pbp2020%>%
+  select(ep, epa, wp, wpa, play_type,success, down, first_down_rush, first_down_pass, third_down_failed, third_down_converted, rush_attempt, pass_attempt, qb_scramble, cpoe, xpass)
+
+stargazer(as.data.frame(sumstats), 
+          type="html",
+          title = "Table 1: EPA Summary Stats",
+          style = "aer",
+           summary.stat = c("mean", "sd", "min", "max"),
+          covariate.labels=c("Expected Points", "Expected Points Added", "Win Probability", "Win Probability Added","PlayType", "Success", "Down","First Down Rush", "First Down Pass", "Third Down Failed", "Third Down Converted", "Rush Attempt", "Pass Attempt", "Scramble", "Completion Percent Over Expected", "Expected Pass Rate"))
+```
+
+
+
+## 4. Empirical Methodology
+
+The empirical techniques we used to answer what makes teams successful in the NFL is a series of linear regressions. The regressions we ran were as follows:
+
+1. $EPA = \beta_0 + \beta_1Down + \beta_2RushAttempt + \beta_3PassAttempt + \epsilon$
+
+2. $EPA = \beta_0  + \beta_1RushAttempt + \epsilon$
+
+3. $EPA = \beta_0  + \beta_1RushAttempt + \beta_2PassAttempt + \epsilon$
+
+4. $EPA = \beta_0  + \beta_1QbScramble + \epsilon$
+
+
+The regressions in Table 3 were created so that we could look at how various aspects of an offensive strategy effects EPA. The first regression in Table 3 looks to see how down and play type affect EPA.  The second regression in Table 3 looks to see how EPA is effected by rush attempt just on first down.  The third regression in Table 3 seeks to find correlation between EPA and rushing and passing attempts, looking at the fourth down only.  The fourth, and final, regression in Table 3 attempts to look at how a QB scramble can effect EPA. 
+
+We used OLS because we wanted to isolate what teams are doing in certain situations and if it's correct.  Many coachs have built careers off of being "Run the ball and play defense" guys.  These old narratives should be tested and tried, especially when the success is not there to back it up.  The end goal in the NFL is to win the game.  Well, how do we get there? These are questions asked every year by NFL teams, whether they are hiring a new coach or not.  
+
+A potential concern with our estimation technique is that our models do not take into effect scheme, players, or momentum.  Momentum is often argued about if it is "real" or not.  I'm sure almost every athlete would say momentum is real.  Aside from this, the types of players you have and play calling matters.  I trust Kyle Shanahan to cook up a great 4th and 2 play much more than I trust Brian Schottenheimer.  This is very difficult to quantify.
+
+A potential problem I thought we may have is that we didn't account for distance to first down.  However, I realized that the down and distance factor is already baked into EPA.  Teams aren't adding much of any points by gaining 4 yards on a 4th and 10 on my own 20 yard line, so it is being accounted for.
+
+## 5.  Results: What Generates Success in the NFL?
+
+```{r, results='asis', warning=FALSE, message=FALSE}
+wpareg <- lm(wpa ~ epa, data = pbp2020)
+stargazer(wpareg,
+          style = "aer",
+          type = "html",
+          title = "Table 2: What Generates Winning in the NFL?",
+          dep.var.labels = "Win Probability Added",
+          covariate.labels = "Expected Points Added")
+
+#WPA vs EPA
+ggplot(firstdown, aes(x=epa, y=wpa))+
+  geom_point (size=0.2)+
+   ylab("Win Probability Added")+
+  xlab("Expected Points Added")+
+  labs(title="Figure 1: WPA by EPA")+
+  stat_smooth()
+```
+
+Here we can see that EPA is positively correlated with Win Probability Added.  WPA is useful because eventually, one team will end up with 100% win probability from 50% (aside from ties).  Finding how a team gets from that 50% to 100% is important.  There are obviously many ways to win in the NFL, but we will look for ways we can achieve WPA.  Now that we know this about WPA and EPA, we can use other variables, similar to IV regressions, to find EPA and in turn WPA.  If we can get positive EPA, we can get positive WPA and inherently wins.
+
+
+```{r, message=FALSE, warning=FALSE}
+EPAreg1 <-lm(epa~  as.factor(down) + rush_attempt+ pass_attempt, data = pbp2020)
+
+
+EPAreg2 <-lm(epa~  rush_attempt, data = firstdown, na.rm = TRUE)
+
+
+EPAreg3 <-lm(epa~  rush_attempt + pass_attempt, data = fourthdown, na.rm = TRUE)
+
+
+EPAreg4 <- lm(epa~ qb_scramble, data = pbp2020)
+```
+
+
+```{r, message=FALSE, warning=FALSE, results='asis'}
+stargazer(EPAreg1, EPAreg2, EPAreg3,EPAreg4,
+          type="html",
+          title = "Table 3: EPA Regressions",
+          style = "aer",
+          covariate.labels = c("2nd Down", "3rd Down", "4th Down", "Rush Attempt", "Pass Attempt", "QB Scramble"),
+          column.labels = c("Play Type and Down", "First Down", "Fourth Down", "QB Scramble"),
+          dep.var.labels = c("EPA"))
+          
+```
+
+
+It can be seen that in general, rushing gives a negative EPA.  We saw earlier that rushing is useful and positive in short yardage.  An interesting observation from the table is that a QB scramble is extremely positive.  I ran this regression because in my time watching football, I've always thought that scrambling leads to good things for teams.  The eye test says helps young and mobile quarterbacks.  It is confirmed here with a 0.394 EPA boost per scramble. 
+
+
+## Results: Visualization
+
+These are very basic plots of EPA.  Play type is a categorical variable,  but Completion Percentage Over Expected has an enormous range because a pass that's completed at a typical rate of 80% can be incomplete, causing a massive negative.  The first two graphics show massive variances for pass plays.  The expected EPA of a pass play is higher than a run, but has a high variance.  We then look at EPA by Completion Percent Over Expected.  We can see that it is also positively correlated.  In a game, that would mean plays like deep throws that did not have a high chance of being completed, but if and when they are they have a large impact on the game.
+
+```{r message=FALSE, warning=FALSE}
+#Play Type vs EPA
+ggplot(pbp2020, aes(x=play_type, y=epa))+
+  geom_boxplot(size=0.2)+
+   ylab("Expected Points Added")+
+  xlab("Play Type")+
+  labs(title="Figure 2: Expected Points by Play Type")
+
+#Play Type vs WPA
+ggplot(pbp2020, aes(x=play_type, y=wpa))+
+  geom_boxplot(size=0.2)+
+   ylab("Win Probability Added")+
+  xlab("Play Type")+
+  labs(title="Figure 3: Win Probability Added by Play Type")
+  
+#CPOE vs EPA
+ggplot(pbp2020, aes(x=cpoe, y=epa))+
+  geom_point(size=0.2)+
+  geom_smooth()+
+  xlab("Completion Percentage Over Expected")+
+  ylab("Expected Points Added")+
+  labs(title="Figure 4: Expected Points Added by Completion Percentage Over Expected")
+```
+
+
+## Results: Expected Values of EPA by Play Type by Down
+
+```{r, message=FALSE}
+#The Expected Values of Passing or Running on First Down
+firstdownrun <- mean(firstdown$epa[firstdown$rush_attempt==1], na.rm = TRUE)
+firstdownpass <- mean(firstdown$epa[firstdown$pass_attempt==1], na.rm = TRUE)
+
+seconddownrun <- mean(seconddown$epa[seconddown$rush_attempt==1], na.rm = TRUE)
+seconddownpass <- mean(seconddown$epa[seconddown$pass_attempt==1], na.rm = TRUE)
+
+thirddownrun <- mean(thirddown$epa[thirddown$rush_attempt==1], na.rm = TRUE)
+thirddownpass <- mean(thirddown$epa[thirddown$pass_attempt==1], na.rm = TRUE)
+
+fourthdownrun <- mean(fourthdown$epa[fourthdown$rush_attempt==1], na.rm = TRUE)
+fourthdownpass <- mean(fourthdown$epa[fourthdown$pass_attempt==1], na.rm = TRUE)
+punt <- mean(fourthdown$epa[fourthdown$play_type=="punt"], na.rm = TRUE)
+fg <- mean(fourthdown$epa[fourthdown$play_type=="field_goal"], na.rm = TRUE)
+```
+
+```{r, message = FALSE}
+first <- cbind(round (firstdownrun, digits = 3), round(firstdownpass, digits = 3), "NA", "NA")
+second <- cbind(round(seconddownrun, digits = 3), round(seconddownpass, digits = 3),  "NA", "NA")
+third <- cbind(round(thirddownrun, digits = 3), round(thirddownpass, digits = 3),  "NA", "NA")
+fourth <- cbind(round(fourthdownrun, digits = 3), round(fourthdownpass, digits = 3), round(punt, digits = 3), round(fg, digits = 3))
+
+matrix <- rbind(first, second, third, fourth)
+rownames(matrix) <- c("First Down", "Second Down", "Third Down", "Fourth Down")
+colnames(matrix) <- c("Rush", "Pass", "Punt", "FG")
+```
+
+
+```{r message=FALSE, results='asis'}
+stargazer(matrix,
+          type="html",
+          style = "aer",
+          title = "Table 4: Expected EPA by Down and Play Type")
+
+
+LeastPassHeavyEarlyDown <- pbp2020 %>%
+	filter(wp>.20 & wp<.80 & down<=2 & qtr<=2 & half_seconds_remaining>120) %>%
+	group_by(posteam) %>%
+	summarize(mean_pass=mean(pass), plays=n()) %>%
+	arrange(mean_pass)
+
+ggplot(LeastPassHeavyEarlyDown, aes(x=reorder(posteam,-mean_pass), y=mean_pass)) +
+  ggtitle("First Down Pass Rate")+
+  xlab("Team") + ylab("Mean Pass")+ 
+	    geom_text(aes(label=posteam))
+
+```
+
+We can see the expected values of play types by down.  I included a chart of early down pass rates from teams.  This is important because many of the NFLs most successful teams passed on first downs.  A historical narrative in football is to run on first down, run to set up the pass, etc.  This helps disprove that narrative, where it can be seen that passing on first down is actually much better than rushing.  
+
+I think a very interesting part of Table 4 is that 2nd down passing EPA is very positive. 2nd down is often suggested as the down to "take a shot on".  This number may be suggesting that offensive coordinators get more aggressive on 2nd down.  We saw in Figure 4 how CPOE correlates with EPA.  It's likely that as offensive coordinators get more aggressive and attack more downfield, they are actually producing good offense.  This paragraph is just a hypothesis, but it is a notable football narrative.  If this speculation is true, teams should be attacking downfield and stretching the field more often.
+
+Some other interesting observations from this table is that First Down rushing is highly negative, but on every other down it is positive.  This most likely has to do with short yardage conversions.  Specifically on 4th down, if a run play is called it is most likely 4th and Short on the opponents side of the field.  This often gives coach the opportunity to do all 4 play types.  Gaining a 4th down conversion when a field goal or punt was the alternative is going to give much more EPA than the EP was expecting.
+
+We can see that teams like KC, Buffalo, Houston, and Seattle have very high rates of early down passing.  It is no coincidence that these teams offenses were highly successful in 2020.  First Down Passing has a much higher expected EPA than rushing; these teams are giving themselves an advantage before the play even starts by doing this.
+
+
+## Results: EPA per Play vs Win Probability Per Play
+
+```{r, message=FALSE, warning=FALSE}
+chart_data <- pbp2020 %>%
+	filter(pass==1) %>%
+	group_by(posteam) %>%
+	summarise(
+	num_db = n(),
+	epa_per_db = sum(epa) / num_db,
+	success_rate = sum(epa > 0) / num_db,
+	wp_per_db = sum(wp) / num_db,
+	sum_wp = sum(wp)
+	)
+
+nfl_logos_df <- read_csv("https://raw.githubusercontent.com/statsbylopez/BlogPosts/master/nfl_teamlogos.csv")
+chart <- chart_data %>% left_join(nfl_logos_df, by = c("posteam" = "team_code"))
+```
+
+```{r}
+
+chart %>%
+ggplot(aes(x = epa_per_db, y = wp_per_db)) +
+	geom_image(aes(image = url), size = 0.06) +
+	labs(x = "EPA Per Play",
+	y = "WP per Play",
+	caption = "Data from nflscrapR",
+	title = "Figure 5: Win Probability per Play & EPA/play",
+	subtitle = "2020") +
+	theme_bw() +
+	theme(axis.title = element_text(size = 12),
+	axis.text = element_text(size = 10),
+	plot.title = element_text(size = 16),
+	plot.subtitle = element_text(size = 14),
+        plot.caption = element_text(size = 12))
+```
+
+
+The x-axis here is once again EPA/Play, but the Y-axis is now WP/Play.  This gives us a teams average win probability at any given time.  This captures a more in depth team winning percentage.  Teams that lose closer games will have higher WP/play than wins.  The Bills lead the league in this category, as they lost only 3 games but were in the game almost the whole time.  This graph is useful because instead of comparing EPA to WPA, we can see how EPA translates to actual win probability.  This is most likely the best graph we have in showing that EPA translates to winning.  By  looking at this graph before last years playoffs, you would've seen the final four teams being in the top right by a good amount.  It can be seen that EPA per Play clearly translates to actual wins.
+
+
+## Results: 2020 EPA Leaders
+```{r}
+EPALeaders <- pbp2020 %>%
+	filter(pass == 1, down<=4) %>%
+	group_by(passer_player_name) %>%
+	summarize(mean_epa = round(mean(epa), digits = 3), success_rate = round(mean(success), digits = 3), plays=n()) %>%
+	arrange(desc(mean_epa)) %>%
+	filter(plays>250)
+EPALeaders = EPALeaders[-1,]
+colnames(EPALeaders) <- c("Player", "Mean EPA", "Success Rate", "Plays")
+
+```
+
+```{r, results ='asis'}
+stargazer(EPALeaders,
+          summary = FALSE,
+          style = "aer",
+          type = "html",
+          title = "Table 5: EPA Leaders")
+
+```
+This is a table of the EPA per pass leaders in 2020.  Judging from Table 5 and Figure 5, I think the Atlanta Falcons are going to be a bounce back team in 2021.  They hired Arthur Smith from the Titans, who turned Ryan Tannehill into an EPA machine.  They also have very solid EPA/Play and WP/P, suggesting they were blowing leads late in games. 
+
+## Conclusion
+
+We have seen that EPA clearly correlates to WPA and WP.  We have also derived how to go about gaining EPA and EPA/Play.  Passing the ball on first down and being aggressive on 4th downs are major positive coefficients.  Passing in general has a much higher expected EPA as well.  Doing these things are a good framework for how to put yourself at an advantage in the NFL over other teams before accounting for the X's and O's.
+
+
+## Citations
+
+Ben Baldwin directed me to nflscrapR and their github.  We used https://gist.github.com/guga31bb/5634562c5a2a7b1e9961ac9b6c568701 to help with a framework of code for few of our more complex graphs.  It also helped us filter our code and group it correctly.
+
+
+---
